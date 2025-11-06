@@ -1,0 +1,53 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Training outputs
+lora_bert_results/
+adalora_bert_results/
+temp_*/
+logs/
+checkpoints/
+*.pth
+*.pt
+*.bin
+*.h5
+*.ckpt
+
+# Model files
+instruction_tuned_model/
+lora_bert_sentiment/adapter_model.safetensors
+
+# Data
+*.csv
+!imdb_samples_2000.csv
+
+# Temporary files
+*.log
+*.cache
