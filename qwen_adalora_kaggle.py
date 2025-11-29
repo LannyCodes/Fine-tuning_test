@@ -78,6 +78,9 @@ def train_qwen_adalora():
         data_file = "imdb_samples_2000.csv"
         
     dataset = load_dataset("csv", data_files=data_file, split="train")
+    
+    # 只使用前 1000 条数据
+    dataset = dataset.select(range(1000))
 
     def process_func(example):
         # 构建指令微调格式
