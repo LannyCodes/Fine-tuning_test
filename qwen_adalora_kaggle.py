@@ -51,6 +51,9 @@ def train_qwen_adalora():
 
     # 3. 加载模型
     print("正在加载模型...")
+    # 在多卡环境下，AdaLoRA 的正则化计算（orth_reg_weight > 0）可能会因为张量不在同一设备导致 RuntimeError
+    # Kaggle 环境虽然通常是 T4 x2，但为了稳妥，建议强制 device_map="auto" 
+    # 并且在 Trainer 中禁用数据并行（如果使用 Accelerate 会自动处理，但 AdaLoRA 比较特殊）
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         quantization_config=bnb_config,
@@ -132,7 +135,11 @@ def train_qwen_adalora():
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         
         # 必须指定 orth_reg_weight 以进行正交正则化
-        orth_reg_weight=0.5,
+        # 注意：在多 GPU 环境下，如果遇到 "Expected all tensors to be on the same device" 错误，
+        # 可能是因为 AdaLoRA 计算正则化项时未能正确处理设备分布。
+        # 临时解决方案：将 orth_reg_weight 设为 0 可以绕过此计算，但会牺牲部分压缩效果。
+        # 或者确保只使用单卡 CUDA_VISIBLE_DEVICES=0
+        orth_reg_weight=0.0, # 暂时关闭以修复多卡设备冲突
     )
     
     model = get_peft_model(model, peft_config)
