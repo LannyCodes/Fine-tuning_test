@@ -97,7 +97,7 @@ def train_qwen_adalora():
     # 计算总训练步数 (用于 AdaLoRA 调度)
     per_device_batch_size = 1
     gradient_accumulation_steps = 8
-    num_epochs = 1
+    num_epochs = 3
     
     # 注意：这里使用 train_dataset 的长度来计算
     num_update_steps_per_epoch = len(train_dataset) // (per_device_batch_size * gradient_accumulation_steps)
@@ -120,11 +120,10 @@ def train_qwen_adalora():
         # 关键：必须提供总训练步数
         total_step=total_train_steps,
         
-        # 关键：更新调度 (参照示例文件的逻辑)
-        # AdaLoRA 需要在训练过程中逐步更新秩，所以需要指定时间点
-        tinit=max(10, total_train_steps // 5),      # 开始修剪的步数
-        tfinal=max(20, total_train_steps // 2),     # 结束修剪的步数
-        deltaT=max(5, total_train_steps // 20),     # 更新频率
+        # 关键：更新调度 (确保 tfinal < total_step)
+        tinit=int(total_train_steps * 0.2),         # 20% 步数时开始
+        tfinal=int(total_train_steps * 0.6),        # 60% 步数时结束
+        deltaT=max(1, int(total_train_steps * 0.05)), # 更新频率
         
         lora_alpha=32,
         lora_dropout=0.1,
