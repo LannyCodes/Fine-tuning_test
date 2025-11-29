@@ -187,7 +187,7 @@ def train_qwen_adalora():
         optim="paged_adamw_8bit",
         
         # 添加验证策略
-        evaluation_strategy="steps",    # 按步数评估
+        eval_strategy="steps",    # 新版 Transformers 使用 eval_strategy
         eval_steps=10,                  # 每10步验证一次
         
         # 关键：根据验证集指标保存最佳模型
