@@ -6,6 +6,10 @@
 # ==========================================
 
 import os
+# 强制只使用第一张显卡，避免 AdaLoRA 在多卡环境下因张量跨设备导致的 RuntimeError
+# AdaLoRA 的正则化计算目前在 device_map="auto" 分布式加载时存在已知兼容性问题
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 import torch
 from datasets import Dataset
 from transformers import (
@@ -135,11 +139,9 @@ def train_qwen_adalora():
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         
         # 必须指定 orth_reg_weight 以进行正交正则化
-        # 注意：在多 GPU 环境下，如果遇到 "Expected all tensors to be on the same device" 错误，
-        # 可能是因为 AdaLoRA 计算正则化项时未能正确处理设备分布。
-        # 临时解决方案：将 orth_reg_weight 设为 0 可以绕过此计算，但会牺牲部分压缩效果。
-        # 或者确保只使用单卡 CUDA_VISIBLE_DEVICES=0
-        orth_reg_weight=0.0, # 暂时关闭以修复多卡设备冲突
+        # 我们已经通过 CUDA_VISIBLE_DEVICES="0" 解决了多卡冲突问题，
+        # 现在可以安全地恢复此参数，保证 AdaLoRA 的效果。
+        orth_reg_weight=0.5,
     )
     
     model = get_peft_model(model, peft_config)
