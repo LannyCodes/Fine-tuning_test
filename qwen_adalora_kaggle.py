@@ -117,6 +117,9 @@ def train_qwen_adalora():
         beta1=0.85,          # SVD 平滑系数
         beta2=0.85,
         
+        # 关键：必须提供总训练步数
+        total_step=total_train_steps,
+        
         # 关键：更新调度 (参照示例文件的逻辑)
         # AdaLoRA 需要在训练过程中逐步更新秩，所以需要指定时间点
         tinit=max(10, total_train_steps // 5),      # 开始修剪的步数
