@@ -10,8 +10,9 @@ import os
 # AdaLoRA 的正则化计算目前在 device_map="auto" 分布式加载时存在已知兼容性问题
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+import os
 import torch
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -68,18 +69,23 @@ def train_qwen_adalora():
     model.gradient_checkpointing_enable()
     model = prepare_model_for_kbit_training(model)
 
-    # 4. 准备数据 (计算 steps 需要)
-    data = [
-        {"text": "Human: 什么是自适应 LoRA (AdaLoRA)？\nAssistant: AdaLoRA 是一种参数高效微调方法，它通过奇异值分解 (SVD) 动态分配不同层的参数预算，在训练过程中自适应地修剪不重要的秩。"},
-        {"text": "Human: Qwen2 7B 可以在 Kaggle 上跑吗？\nAssistant: 可以，通过使用 4-bit 量化 (QLoRA) 和梯度累积，Qwen2 7B 可以在 Kaggle 的 T4/P100 16GB 显存上运行。"},
-        {"text": "Human: 解释 Python 装饰器。\nAssistant: 装饰器是 Python 中用于修改函数或类行为的函数，通常使用 @ 符号应用。它们允许在不修改原函数代码的情况下增加功能。"}
-    ] * 50 # 增加一点数据量以便计算步骤
-    
-    dataset = Dataset.from_list(data)
+    # 4. 准备数据
+    print("正在加载 IMDB 数据集...")
+    # 使用相对路径，方便上传到 GitHub 后其他人也能直接运行
+    data_file = os.path.join(os.path.dirname(__file__), "imdb_samples_2000.csv")
+    if not os.path.exists(data_file):
+        # 兼容 Kaggle 环境或不同工作目录的情况
+        data_file = "imdb_samples_2000.csv"
+        
+    dataset = load_dataset("csv", data_files=data_file, split="train")
 
     def process_func(example):
+        # 构建指令微调格式
+        # IMDB 数据集包含 text 和 label (positive/negative)
+        prompt = f"Human: 请判断下面这段电影评论的情感倾向（positive 或 negative）。\n评论内容：{example['text']}\nAssistant: {example['label']}"
+        
         inputs = tokenizer(
-            example["text"] + tokenizer.eos_token, 
+            prompt + tokenizer.eos_token, 
             truncation=True, 
             max_length=512,
             padding="max_length"
