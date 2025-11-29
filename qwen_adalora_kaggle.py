@@ -214,6 +214,13 @@ def train_qwen_adalora():
     print("开始 AdaLoRA 训练...")
     trainer.train()
     
+    # 8. 训练结束后，进行最终评估
+    # 虽然我们在训练过程中已经进行了验证，但在 load_best_model_at_end=True 的情况下，
+    # 再次运行 evaluate() 可以确认当前加载的“最佳模型”的具体指标。
+    print("\n正在对最佳模型进行最终评估...")
+    final_metrics = trainer.evaluate()
+    print("最终验证集指标:", final_metrics)
+    
     # 保存
     print(f"保存 AdaLoRA 适配器到 {OUTPUT_DIR}...")
     trainer.model.save_pretrained(OUTPUT_DIR)
