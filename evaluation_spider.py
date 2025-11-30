@@ -17,7 +17,7 @@ MODEL_ID = "Qwen/Qwen2-7B-Instruct"
 # 微调后的适配器路径
 ADAPTER_PATH = "/kaggle/working/qwen2_spider_output" 
 # Spider 数据集路径 (需要包含 database 文件夹)
-DATA_DIR = "/kaggle/input/spider-lora/data"
+DATA_DIR = "/kaggle/input/spider-lora/data/spider"
 DB_DIR = os.path.join(DATA_DIR, "database") # 数据库文件所在目录
 
 def execute_sql(db_path, sql):
