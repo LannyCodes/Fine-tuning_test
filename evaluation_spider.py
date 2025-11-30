@@ -117,42 +117,53 @@ def load_models():
     model.eval()
     return tokenizer, model
 
-def generate_response(model, tokenizer, prompt):
-    """生成 SQL 回答"""
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+def generate_response_batch(model, tokenizer, prompts, batch_size=8):
+    """批量生成 SQL 回答 (优化推理速度)"""
+    responses = []
     
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=128, # SQL 通常不会特别长
-            do_sample=False,    # 确定性生成，适合代码生成
-            pad_token_id=tokenizer.eos_token_id
-        )
-    
-    # 解码
-    generated_ids = outputs[0][inputs.input_ids.shape[1]:]
-    response = tokenizer.decode(generated_ids, skip_special_tokens=True)
-    
-    # === 关键修复：后处理 ===
-    # 提取 Markdown 代码块中的 SQL
-    import re
-    # 匹配 ```sql ... ``` 或 ``` ... ```
-    code_block_pattern = r"```(?:sql)?\s*(.*?)```"
-    match = re.search(code_block_pattern, response, re.DOTALL | re.IGNORECASE)
-    if match:
-        response = match.group(1).strip()
-    else:
-        # 如果没有代码块，尝试提取第一行 SQL (有些模型会先解释再写 SQL)
-        # 简单的启发式：如果包含 SELECT，就截取从 SELECT 开始的部分
-        select_idx = response.upper().find("SELECT")
-        if select_idx != -1:
-            response = response[select_idx:]
-            # 截取到分号或行尾
-            end_idx = response.find(";")
-            if end_idx != -1:
-                response = response[:end_idx+1]
-    
-    return response
+    # 进度条显示
+    try:
+        from tqdm import tqdm
+        iterator = tqdm(range(0, len(prompts), batch_size), desc="Batch Inference")
+    except ImportError:
+        iterator = range(0, len(prompts), batch_size)
+        
+    for i in iterator:
+        batch_prompts = prompts[i:i + batch_size]
+        # padding=True: 动态填充到该 batch 最长序列
+        inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True).to(model.device)
+        
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=128,
+                do_sample=False,
+                pad_token_id=tokenizer.eos_token_id
+            )
+        
+        # 批量解码
+        # 注意：outputs 包含 input_ids，需要切片
+        generated_tokens = outputs[:, inputs.input_ids.shape[1]:]
+        batch_responses = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+        
+        # 后处理
+        for response in batch_responses:
+            # 提取 Markdown 代码块中的 SQL
+            import re
+            code_block_pattern = r"```(?:sql)?\s*(.*?)```"
+            match = re.search(code_block_pattern, response, re.DOTALL | re.IGNORECASE)
+            if match:
+                response = match.group(1).strip()
+            else:
+                select_idx = response.upper().find("SELECT")
+                if select_idx != -1:
+                    response = response[select_idx:]
+                    end_idx = response.find(";")
+                    if end_idx != -1:
+                        response = response[:end_idx+1]
+            responses.append(response)
+            
+    return responses
 
 def execute_sql(db_path, sql):
     """在 SQLite 中执行 SQL 并返回结果"""
@@ -171,32 +182,34 @@ def execute_sql(db_path, sql):
         return f"Error: {str(e)}"
 
 def evaluate_spider(tokenizer, model, test_data, limit=None):
-    """执行批量评估 (Execution Accuracy)"""
+    """执行批量评估 (Execution Accuracy) - 批量推理优化版"""
     print(f"\n=== 开始 Spider 评估 (共 {len(test_data)} 条) ===")
     
     if limit:
         test_data = test_data[:limit]
         print(f"仅测试前 {limit} 条数据")
     
+    # 提取所有 Prompt
+    prompts = [item["instruction"] for item in test_data]
+    
+    # 批量生成 (Batch Inference)
+    print("正在进行批量推理...")
+    # 显存允许的情况下，Batch Size 越大越好。T4 x 2 可以尝试 32 或 64
+    # 如果显存还剩很多，可以继续调大 batch_size 以提高利用率
+    # 注意：由于 device_map="auto" 将模型切分到两张卡，GPU 会交替工作，较难达到 100% 双卡同时满载
+    pred_sqls = generate_response_batch(model, tokenizer, prompts, batch_size=32)
+    
     results = []
     exec_correct_count = 0
     str_correct_count = 0
     valid_sql_count = 0
     
-    try:
-        from tqdm import tqdm
-        iterator = tqdm(test_data, desc="Generating SQL")
-    except ImportError:
-        iterator = test_data
-    
-    for i, item in enumerate(iterator):
-        prompt = item["instruction"]
+    # 后续评估逻辑不变，只是不再调用 generate_response
+    for i, item in enumerate(test_data):
         truth_sql = item["output"]
         db_id = item["db_id"]
-        
-        # 1. 生成 SQL
-        pred_sql = generate_response(model, tokenizer, prompt)
-        pred_sql = pred_sql.strip()
+        pred_sql = pred_sqls[i].strip() # 获取对应的预测结果
+        prompt = item["instruction"]
         
         # 2. 字符串匹配 (String Match)
         clean_pred = pred_sql.lower().strip().rstrip(";")
@@ -212,13 +225,11 @@ def evaluate_spider(tokenizer, model, test_data, limit=None):
         pred_result = execute_sql(db_path, pred_sql)
         
         # 统计语法合法的 SQL (Valid SQL)
-        # 只要不报错（返回的不是 Error 字符串），就认为语法合法（即便结果不对）
         is_valid_sql = not isinstance(pred_result, str)
         if is_valid_sql:
             valid_sql_count += 1
 
         # 判断执行结果是否一致
-        # 注意：如果两个都报错且报错信息一样，不算正确；只有成功执行且结果一致才算
         is_exec_match = False
         if not isinstance(truth_result, str) and not isinstance(pred_result, str):
             if truth_result == pred_result:
@@ -236,16 +247,13 @@ def evaluate_spider(tokenizer, model, test_data, limit=None):
             "exec_error": pred_result if isinstance(pred_result, str) else ""
         })
         
-        # 打印前几个错误样例，方便调试
+        # 打印前几个错误样例
         if not is_valid_sql and i < 5:
             print(f"\n[Error Sample {i}]")
-            print(f"Prompt: {prompt[-200:]}...") # 只打印最后 200 字符
+            print(f"Prompt: {prompt[-100:]}...") 
             print(f"Prediction: {pred_sql}")
             print(f"Error: {pred_result}")
             print("-" * 30)
-        
-        if not hasattr(iterator, "desc") and (i + 1) % 10 == 0:
-            print(f"已处理: {i + 1}/{len(test_data)}")
     
     total = len(test_data)
     exec_acc = exec_correct_count / total if total > 0 else 0
@@ -256,7 +264,6 @@ def evaluate_spider(tokenizer, model, test_data, limit=None):
     print(f"Execution Accuracy: {exec_acc:.4f} ({exec_correct_count}/{total})")
     print(f"String-Match Accuracy: {str_acc:.4f} ({str_correct_count}/{total})")
     print(f"Valid SQL Accuracy: {valid_sql_acc:.4f} ({valid_sql_count}/{total}) (语法正确且可执行)")
-
     
     output_csv = "spider_evaluation_results.csv"
     pd.DataFrame(results).to_csv(output_csv, index=False)
@@ -295,4 +302,5 @@ if __name__ == "__main__":
     
     # 3. 评估 (可以设置 limit=50 快速验证)
     # 全量评估可能需要较长时间
-    evaluate_spider(tokenizer, model, test_data, limit=100) 
+    # 为了观察 GPU 利用率，我们将 limit 设大一点 (例如 200)
+    evaluate_spider(tokenizer, model, test_data, limit=200) 
