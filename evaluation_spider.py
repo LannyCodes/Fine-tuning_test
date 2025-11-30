@@ -216,6 +216,14 @@ def evaluate_spider(tokenizer, model, test_data, limit=None):
             "exec_error": pred_result if isinstance(pred_result, str) else ""
         })
         
+        # 打印前几个错误样例，方便调试
+        if not is_valid_sql and i < 5:
+            print(f"\n[Error Sample {i}]")
+            print(f"Prompt: {prompt[-200:]}...") # 只打印最后 200 字符
+            print(f"Prediction: {pred_sql}")
+            print(f"Error: {pred_result}")
+            print("-" * 30)
+        
         if not hasattr(iterator, "desc") and (i + 1) % 10 == 0:
             print(f"已处理: {i + 1}/{len(test_data)}")
     
@@ -267,4 +275,4 @@ if __name__ == "__main__":
     
     # 3. 评估 (可以设置 limit=50 快速验证)
     # 全量评估可能需要较长时间
-    evaluate_spider(tokenizer, model, test_data, limit=20) 
+    evaluate_spider(tokenizer, model, test_data, limit=100) 
