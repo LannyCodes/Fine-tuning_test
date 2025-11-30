@@ -229,7 +229,7 @@ def train_spider():
     # DDP 模式下，per_device_batch_size 决定了每张卡的显存占用
     # T4 (16GB) 4-bit QLoRA 训练 7B 模型 + DDP + 1024 长度
     # 实测 batch_size=2 爆显存 (OOM)，降为 1
-    per_device_batch_size = 1 
+    per_device_batch_size = 2 
     # gradient_accumulation_steps 在上面已经定义并根据 DDP 调整过了
     
     # 为了保持等效的 Total Batch Size，我们需要把 gradient_accumulation_steps 翻倍
