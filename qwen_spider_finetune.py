@@ -166,9 +166,8 @@ def train_spider():
     device_map = "auto"
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     ddp = world_size != 1
-    
-    # 预先定义 gradient_accumulation_steps 初始值
-    gradient_accumulation_steps = 8
+    # 默认梯度累积步数 (对应 batch_size=1 的情况)
+    gradient_accumulation_steps = 16 
     
     if ddp:
         # 必须先初始化进程组，否则后面的 barrier() 会报错
@@ -176,7 +175,10 @@ def train_spider():
              torch.distributed.init_process_group(backend="nccl")
         
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
-        gradient_accumulation_steps = gradient_accumulation_steps // world_size
+        # 在 DDP 下，总步数 = 步数 * World Size，所以单卡累积步数要除以卡数
+        # 目标 Total Batch = 16
+        # 2张卡: 16 / 2 = 8
+        gradient_accumulation_steps = 16 // world_size
         print(f"检测到 DDP 环境 (World Size: {world_size})，已调整 device_map 和梯度累积步数")
 
     model = AutoModelForCausalLM.from_pretrained(
@@ -227,9 +229,17 @@ def train_spider():
     # 4. LoRA 配置 (替换 AdaLoRA)
     # 计算步数
     # DDP 模式下，per_device_batch_size 决定了每张卡的显存占用
-    # T4 (16GB) 在 4-bit QLoRA 下，Batch=4 会 OOM，Batch=2 是安全值
-    per_device_batch_size = 2 
-    # gradient_accumulation_steps 在上面已经根据 DDP 调整过了
+    # T4 (16GB) 4-bit QLoRA 训练 7B 模型 + DDP + 1024 长度
+    # 实测 batch_size=2 爆显存 (OOM)，降为 1
+    per_device_batch_size = 1 
+    # gradient_accumulation_steps 在上面已经定义并根据 DDP 调整过了
+    
+    # 为了保持等效的 Total Batch Size，我们需要把 gradient_accumulation_steps 翻倍
+    # 原来是 8 (假设 batch=1)，刚才我们改成了 2 (假设 batch=2)
+    # 现在改回 batch=1，我们应该把 gradient_accumulation_steps 设大一点来弥补
+    # 这里我们让它自动计算： Total Batch Size = 16 左右比较好
+    # 2 (卡) * 1 (Batch) * 8 (Accumulation) = 16
+    gradient_accumulation_steps = 8 // world_size # 重新调整回较大的累积步数
     
     num_epochs = 2 # Spider 数据集较复杂，2-3 个 epoch
     
