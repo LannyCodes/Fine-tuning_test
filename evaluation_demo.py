@@ -100,7 +100,11 @@ def evaluate_subjective(tokenizer, base_model, finetuned_model):
         
         # 基座模型回答
         # (注: 如果是同一个模型实例，需要 disable adapter)
-        with finetuned_model.disable_adapter():
+        if hasattr(finetuned_model, "disable_adapter"):
+            with finetuned_model.disable_adapter():
+                base_resp = generate_response(finetuned_model, tokenizer, prompt)
+        else:
+            # 如果没有加载 Adapter (或者加载失败导致回退到基座模型)，直接生成
             base_resp = generate_response(finetuned_model, tokenizer, prompt)
             
         # 微调模型回答
