@@ -27,7 +27,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # --- 配置部分 ---
 MODEL_ID = "Qwen/Qwen2-7B-Instruct"
 OUTPUT_DIR = "/kaggle/working/qwen2_spider_output"
-DATA_DIR = "/kaggle/input/spider-lora/data"  # Spider 数据集路径
+DATA_DIR = "/kaggle/input/spider-lora/data/spider"  # Spider 数据集路径
 
 # --- Spider 数据处理工具函数 ---
 
