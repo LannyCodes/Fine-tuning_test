@@ -14,31 +14,49 @@ import pandas as pd
 # ==========================================
 
 MODEL_ID = "Qwen/Qwen2-7B-Instruct"
-# 假设微调后的适配器保存在这里 (请根据实际情况修改)
-ADAPTER_PATH = "/kaggle/working/qwen2_adalora_output" 
+# 微调后的适配器路径 (假设已挂载到 Kaggle Input)
+# 注意：需要指向包含 adapter_model.bin/safetensors 的目录
+ADAPTER_PATH = "/kaggle/input/fine-tuning/qwen2_adalora_output" 
 
 def load_models():
     """同时加载基座模型和微调后的模型"""
     print("正在加载基座模型...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
-    # 加载基座模型 (为了演示，这里假设显存足够，或者分次加载)
-    # 在实际显存受限环境下，建议先跑一次基座模型生成结果，保存后再跑微调模型
+    # 加载基座模型 (使用 4-bit 量化以节省显存，与训练时一致)
+    from transformers import BitsAndBytesConfig
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_use_double_quant=True,
+    )
+    
     base_model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
+        quantization_config=bnb_config,
         device_map="auto",
-        torch_dtype=torch.float16,
         trust_remote_code=True
     )
     
     # 加载微调后的模型 (Base + Adapter)
-    # 注意：这里为了演示方便，直接在 base_model 上挂载 adapter
-    # 实际对比时，你可能需要两个模型实例，或者加载/卸载 adapter
     print(f"正在加载 LoRA 适配器: {ADAPTER_PATH}...")
     try:
-        finetuned_model = PeftModel.from_pretrained(base_model, ADAPTER_PATH)
+        # 尝试加载指定的 checkpoint (如 checkpoint-339) 或者根目录的 adapter
+        # 如果 ADAPTER_PATH 下面有 checkpoint-339 文件夹，优先尝试加载它
+        checkpoint_path = os.path.join(ADAPTER_PATH, "checkpoint-339")
+        if os.path.exists(checkpoint_path):
+            print(f"发现 Checkpoint-339，正在加载: {checkpoint_path}")
+            finetuned_model = PeftModel.from_pretrained(base_model, checkpoint_path)
+        else:
+            print(f"未找到特定 Checkpoint，加载根目录 Adapter: {ADAPTER_PATH}")
+            finetuned_model = PeftModel.from_pretrained(base_model, ADAPTER_PATH)
+            
     except Exception as e:
         print(f"警告: 无法加载适配器 ({e})，将仅使用基座模型演示。")
+        print("请确保 ADAPTER_PATH 指向了正确的目录 (包含 adapter_config.json)")
         finetuned_model = base_model
 
     return tokenizer, base_model, finetuned_model
@@ -130,17 +148,42 @@ def evaluate_objective(tokenizer, model, references):
     print("提示: ROUGE 分数越高，表示生成结果与标准答案的用词越接近。")
 
 if __name__ == "__main__":
-    # 1. 准备测试数据 (通常来自你的验证集)
-    test_data = [
-        {
-            "instruction": "什么是 AdaLoRA？",
-            "output": "AdaLoRA 是一种参数高效微调方法，它通过奇异值分解 (SVD) 动态分配不同层的参数预算，在训练过程中自适应地修剪不重要的秩。"
-        },
-        {
-            "instruction": "Qwen2 7B 可以在 Kaggle 上跑吗？",
-            "output": "可以，通过使用 4-bit 量化 (QLoRA) 和梯度累积，Qwen2 7B 可以在 Kaggle 的 T4/P100 16GB 显存上运行。"
-        }
-    ]
+    # 1. 准备测试数据
+    print("正在加载测试数据 (IMDB 1001-1200)...")
+    try:
+        # 尝试读取 CSV 文件
+        # 优先尝试相对路径，兼容本地和 Kaggle
+        data_path = os.path.join(os.path.dirname(__file__), "imdb_samples_2000.csv")
+        if not os.path.exists(data_path):
+            data_path = "imdb_samples_2000.csv"
+            
+        df = pd.read_csv(data_path)
+        
+        # 截取 1001-1200 行 (索引 1000:1200)
+        # 注意: 切片是左闭右开，所以是 1000:1200，对应第 1001 到 1200 条
+        test_df = df.iloc[1000:1200]
+        
+        test_data = []
+        for _, row in test_df.iterrows():
+            test_data.append({
+                "instruction": f"Human: 请判断下面这段电影评论的情感倾向（positive 或 negative）。\n评论内容：{row['text']}\nAssistant: ",
+                "output": row['label']
+            })
+            
+        print(f"成功加载 {len(test_data)} 条测试数据。")
+        
+    except Exception as e:
+        print(f"加载 CSV 数据失败 ({e})，将使用默认示例数据。")
+        test_data = [
+            {
+                "instruction": "什么是 AdaLoRA？",
+                "output": "AdaLoRA 是一种参数高效微调方法，它通过奇异值分解 (SVD) 动态分配不同层的参数预算，在训练过程中自适应地修剪不重要的秩。"
+            },
+            {
+                "instruction": "Qwen2 7B 可以在 Kaggle 上跑吗？",
+                "output": "可以，通过使用 4-bit 量化 (QLoRA) 和梯度累积，Qwen2 7B 可以在 Kaggle 的 T4/P100 16GB 显存上运行。"
+            }
+        ]
 
     # 2. 加载模型
     # 注意：如果在没有 GPU 的环境运行此脚本会非常慢或报错

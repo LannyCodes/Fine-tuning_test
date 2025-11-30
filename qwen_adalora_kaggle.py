@@ -232,7 +232,33 @@ def train_qwen_adalora():
     )
 
     print("开始 AdaLoRA 训练...")
-    trainer.train()
+    
+    # 检查是否存在 checkpoint，如果存在则自动恢复训练
+    last_checkpoint = None
+    if os.path.isdir(OUTPUT_DIR):
+        from transformers.trainer_utils import get_last_checkpoint
+        last_checkpoint = get_last_checkpoint(OUTPUT_DIR)
+    
+    # 如果当前工作目录没有 checkpoint，尝试从 Kaggle Input 目录寻找
+    # 这是一个常见场景：上一轮训练的 Output 被作为下一轮的 Input
+    if last_checkpoint is None:
+        INPUT_CHECKPOINT_DIR = "/kaggle/input/fine-tuning/qwen2_adalora_output"
+        if os.path.isdir(INPUT_CHECKPOINT_DIR):
+            print(f"当前工作目录无断点，正在检查输入目录: {INPUT_CHECKPOINT_DIR}")
+            # 优先查找指定的 checkpoint-339
+            specific_ckpt = os.path.join(INPUT_CHECKPOINT_DIR, "checkpoint-339")
+            if os.path.exists(specific_ckpt):
+                last_checkpoint = specific_ckpt
+                print(f"找到指定断点: {last_checkpoint}")
+            else:
+                # 否则尝试找最新的
+                from transformers.trainer_utils import get_last_checkpoint
+                last_checkpoint = get_last_checkpoint(INPUT_CHECKPOINT_DIR)
+    
+    if last_checkpoint:
+        print(f"检测到断点，将从 {last_checkpoint} 恢复训练...")
+            
+    trainer.train(resume_from_checkpoint=last_checkpoint)
     
     # 8. 训练结束后，进行最终评估
     # 虽然我们在训练过程中已经进行了验证，但在 load_best_model_at_end=True 的情况下，
@@ -240,6 +266,9 @@ def train_qwen_adalora():
     print("\n正在对最佳模型进行最终评估...")
     final_metrics = trainer.evaluate()
     print("最终验证集指标:", final_metrics)
+    
+    if trainer.state.best_model_checkpoint:
+        print(f"最佳模型 Checkpoint: {trainer.state.best_model_checkpoint}")
     
     # 保存
     print(f"保存 AdaLoRA 适配器到 {OUTPUT_DIR}...")
