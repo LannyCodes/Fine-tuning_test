@@ -118,6 +118,11 @@ def train_spider():
     db_map = load_spider_tables(tables_path)
     train_data_list = load_spider_data(train_path, db_map)
     
+    # 仅使用前 500 条数据
+    if len(train_data_list) > 500:
+        train_data_list = train_data_list[:500]
+        print(f"为了加速训练，已截取前 500 条数据 (原数据量: {len(load_spider_data(train_path, db_map))})")
+    
     # 转为 HuggingFace Dataset
     full_dataset = Dataset.from_list(train_data_list)
     print(f"总数据量: {len(full_dataset)}")
