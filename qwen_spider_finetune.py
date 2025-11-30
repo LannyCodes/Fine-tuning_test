@@ -237,9 +237,9 @@ def train_spider():
         fp16=True,
         optim="paged_adamw_8bit",
         eval_strategy="steps",
-        eval_steps=100,
+        eval_steps=500, # 减少评估频率，避免频繁打断训练
         save_strategy="steps",
-        save_steps=100,
+        save_steps=500, # 减少保存频率，节省磁盘空间
         load_best_model_at_end=True, # DDP 下这可能会比较慢，但为了效果保留
         metric_for_best_model="eval_loss",
         report_to="none",
