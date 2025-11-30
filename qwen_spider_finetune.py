@@ -3,6 +3,9 @@
 # ==========================================
 
 import os
+# 强制单卡 (必须在 import torch 之前设置)
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 import json
 import torch
 from datasets import Dataset
@@ -22,7 +25,7 @@ from peft import (
 )
 
 # 强制单卡
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0" (已移至顶部)
 
 # --- 配置部分 ---
 MODEL_ID = "Qwen/Qwen2-7B-Instruct"
