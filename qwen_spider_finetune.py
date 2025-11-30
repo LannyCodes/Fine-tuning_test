@@ -131,13 +131,13 @@ def train_spider():
     db_map = load_spider_tables(tables_path)
     train_data_list = load_spider_data(train_path, db_map)
     
-    # 仅使用前 500 条数据
-    # if len(train_data_list) > 500:
-    #     train_data_list = train_data_list[:500]
-    #     print(f"为了加速训练，已截取前 500 条数据 (原数据量: {len(load_spider_data(train_path, db_map))})")
+    # 仅使用前 3500 条数据 (总数据量的一半左右，加速训练)
+    if len(train_data_list) > 3500:
+        train_data_list = train_data_list[:3500]
+        print(f"为了平衡速度与效果，已截取前 3500 条数据 (原数据量: {len(load_spider_data(train_path, db_map))})")
     
     # 使用全部数据
-    print(f"使用全部训练数据: {len(train_data_list)} 条")
+    # print(f"使用全部训练数据: {len(train_data_list)} 条")
     
     # 转为 HuggingFace Dataset
     full_dataset = Dataset.from_list(train_data_list)
@@ -227,17 +227,9 @@ def train_spider():
     # 4. LoRA 配置 (替换 AdaLoRA)
     # 计算步数
     # DDP 模式下，per_device_batch_size 决定了每张卡的显存占用
-    # T4 (16GB) 4-bit QLoRA 训练 7B 模型 + DDP + 1024 长度
-    # 实测 batch_size=2 爆显存 (OOM)，降为 1
+    # T4 (16GB) 在 4-bit QLoRA 下，Batch=4 会 OOM，Batch=2 是安全值
     per_device_batch_size = 2 
-    # gradient_accumulation_steps 在上面已经定义并根据 DDP 调整过了
-    
-    # 为了保持等效的 Total Batch Size，我们需要把 gradient_accumulation_steps 翻倍
-    # 原来是 8 (假设 batch=1)，刚才我们改成了 2 (假设 batch=2)
-    # 现在改回 batch=1，我们应该把 gradient_accumulation_steps 设大一点来弥补
-    # 这里我们让它自动计算： Total Batch Size = 16 左右比较好
-    # 2 (卡) * 1 (Batch) * 8 (Accumulation) = 16
-    gradient_accumulation_steps = 8 // world_size # 重新调整回较大的累积步数
+    # gradient_accumulation_steps 在上面已经根据 DDP 调整过了
     
     num_epochs = 2 # Spider 数据集较复杂，2-3 个 epoch
     
