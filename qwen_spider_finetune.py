@@ -3,8 +3,8 @@
 # ==========================================
 
 import os
-# 强制单卡 (必须在 import torch 之前设置)
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# 移除强制单卡限制，允许使用多卡
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import json
 import torch
@@ -14,11 +14,11 @@ from transformers import (
     AutoTokenizer,
     TrainingArguments,
     Trainer,
-    DataCollatorForLanguageModeling,
+    DataCollatorForSeq2Seq, # 使用 Seq2Seq Collator 更适合生成任务
     BitsAndBytesConfig
 )
 from peft import (
-    AdaLoraConfig,
+    LoraConfig, # 切换为标准 LoRA
     get_peft_model,
     TaskType,
     prepare_model_for_kbit_training
@@ -119,9 +119,12 @@ def train_spider():
     train_data_list = load_spider_data(train_path, db_map)
     
     # 仅使用前 500 条数据
-    if len(train_data_list) > 500:
-        train_data_list = train_data_list[:500]
-        print(f"为了加速训练，已截取前 500 条数据 (原数据量: {len(load_spider_data(train_path, db_map))})")
+    # if len(train_data_list) > 500:
+    #     train_data_list = train_data_list[:500]
+    #     print(f"为了加速训练，已截取前 500 条数据 (原数据量: {len(load_spider_data(train_path, db_map))})")
+    
+    # 使用全部数据
+    print(f"使用全部训练数据: {len(train_data_list)} 条")
     
     # 转为 HuggingFace Dataset
     full_dataset = Dataset.from_list(train_data_list)
@@ -145,10 +148,19 @@ def train_spider():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # DDP 环境下 device_map 配置逻辑
+    device_map = "auto"
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    ddp = world_size != 1
+    if ddp:
+        device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
+        gradient_accumulation_steps = gradient_accumulation_steps // world_size
+        print(f"检测到 DDP 环境 (World Size: {world_size})，已调整 device_map 和梯度累积步数")
+
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map=device_map,
         trust_remote_code=True
     )
     model.gradient_checkpointing_enable()
@@ -188,30 +200,26 @@ def train_spider():
     train_dataset = train_dataset.map(process_func, remove_columns=train_dataset.column_names)
     eval_dataset = eval_dataset.map(process_func, remove_columns=eval_dataset.column_names)
 
-    # 4. AdaLoRA 配置
+    # 4. LoRA 配置 (替换 AdaLoRA)
     # 计算步数
-    per_device_batch_size = 1
-    gradient_accumulation_steps = 8
+    # DDP 模式下，per_device_batch_size 决定了每张卡的显存占用
+    # T4 (16GB) 在 4-bit QLoRA 下，可以尝试 2 或 4
+    per_device_batch_size = 4 
+    # gradient_accumulation_steps 在上面已经根据 DDP 调整过了
+    
     num_epochs = 2 # Spider 数据集较复杂，2-3 个 epoch
     
-    num_update_steps_per_epoch = len(train_dataset) // (per_device_batch_size * gradient_accumulation_steps)
+    num_update_steps_per_epoch = len(train_dataset) // (per_device_batch_size * gradient_accumulation_steps * world_size)
     total_train_steps = num_update_steps_per_epoch * num_epochs
     
-    peft_config = AdaLoraConfig(
+    peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
         inference_mode=False,
-        init_r=16,           # 稍微调大一点，SQL 逻辑复杂
-        target_r=8,
-        beta1=0.85,
-        beta2=0.85,
-        tinit=int(total_train_steps * 0.1),
-        tfinal=int(total_train_steps * 0.5),
-        deltaT=max(1, int(total_train_steps * 0.05)),
-        lora_alpha=32,
+        r=64,                # 标准 LoRA 秩，Spider 任务建议设大一点
+        lora_alpha=128,      # 通常是 r 的 2 倍
         lora_dropout=0.05,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        orth_reg_weight=0.5,
-        total_step=total_train_steps # 关键
+        bias="none",
     )
     
     model = get_peft_model(model, peft_config)
@@ -232,9 +240,10 @@ def train_spider():
         eval_steps=100,
         save_strategy="steps",
         save_steps=100,
-        load_best_model_at_end=True,
+        load_best_model_at_end=True, # DDP 下这可能会比较慢，但为了效果保留
         metric_for_best_model="eval_loss",
-        report_to="none"
+        report_to="none",
+        ddp_find_unused_parameters=False # DDP 关键参数
     )
 
     trainer = Trainer(
@@ -242,7 +251,7 @@ def train_spider():
         args=args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
+        data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True),
     )
 
     print("开始训练...")

@@ -137,6 +137,7 @@ def generate_response_batch(model, tokenizer, prompts, batch_size=8):
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=128,
+                num_beams=4,       # 使用 Beam Search 提升生成的准确性
                 do_sample=False,
                 pad_token_id=tokenizer.eos_token_id
             )
