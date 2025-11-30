@@ -73,7 +73,8 @@ def generate_response(model, tokenizer, instruction):
     generated_ids = model.generate(
         model_inputs.input_ids,
         max_new_tokens=128,
-        do_sample=False  # 评估时通常关闭采样以保证确定性，或者开启采样测多样性
+        do_sample=False,  # 评估时通常关闭采样以保证确定性
+        pad_token_id=tokenizer.pad_token_id  # 显式设置 pad_token_id 避免警告
     )
     generated_ids = [
         output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
@@ -130,22 +131,47 @@ def evaluate_objective(tokenizer, model, references):
     注意：对于生成式任务，ROUGE 分数仅供参考，不代表绝对质量
     """
     print("\n=== 2. 客观指标评估 (ROUGE) ===")
+    print(f"共加载 {len(references)} 条测试数据，开始批量推理...")
     
     rouge = evaluate.load("rouge")
     
     predictions = []
     ground_truths = []
+    detailed_results = [] # 用于保存详细结果
     
-    print("正在生成回答并计算指标...")
-    for item in references:
+    # 尝试导入 tqdm 显示进度，如果没有则使用普通打印
+    try:
+        from tqdm import tqdm
+        iterator = tqdm(references, desc="Inference Progress")
+    except ImportError:
+        iterator = references
+        print("提示: 安装 tqdm 可显示进度条 (pip install tqdm)")
+    
+    for i, item in enumerate(iterator):
         prompt = item["instruction"]
         truth = item["output"]
         
         pred = generate_response(model, tokenizer, prompt)
         
+        # 收集详细结果以便保存
+        detailed_results.append({
+            "instruction": prompt,
+            "ground_truth": truth,
+            "prediction": pred
+        })
+        
+        # 简单的进度打印 (如果没用 tqdm)
+        if not hasattr(iterator, "desc") and (i + 1) % 10 == 0:
+            print(f"已处理: {i + 1}/{len(references)}")
+        
         # 中文需要分词，否则 ROUGE 计算不准
         predictions.append(" ".join(jieba.cut(pred)))
         ground_truths.append(" ".join(jieba.cut(truth)))
+    
+    # 保存详细预测结果
+    output_csv = "objective_evaluation_results.csv"
+    pd.DataFrame(detailed_results).to_csv(output_csv, index=False)
+    print(f"\n详细预测结果已保存至: {output_csv}")
     
     results = rouge.compute(predictions=predictions, references=ground_truths)
     print(f"ROUGE-1: {results['rouge1']:.4f} (词重合度)")
