@@ -8,6 +8,7 @@ import os
 
 import json
 import torch
+from contextlib import contextmanager
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -93,6 +94,18 @@ def load_spider_data(data_path, db_schema_map):
         
     return processed_data
 
+@contextmanager
+def torch_main_process_first(local_rank: int, desc: str = "process"):
+    """
+    Context manager that ensures the main process runs the block first, while other processes wait.
+    Copied from transformers.trainer_pt_utils
+    """
+    if local_rank not in [-1, 0]:
+        torch.distributed.barrier()
+    yield
+    if local_rank == 0:
+        torch.distributed.barrier()
+
 # --- 主训练函数 ---
 
 def train_spider():
@@ -147,6 +160,7 @@ def train_spider():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right" # 确保 padding 在右侧 (生成任务要求)
 
     # DDP 环境下 device_map 配置逻辑
     device_map = "auto"
@@ -201,8 +215,10 @@ def train_spider():
         return inputs
 
     print("正在对数据进行 Tokenization (这可能需要几分钟)...")
-    train_dataset = train_dataset.map(process_func, remove_columns=train_dataset.column_names)
-    eval_dataset = eval_dataset.map(process_func, remove_columns=eval_dataset.column_names)
+    # 在 DDP 模式下，只在主进程进行 map 操作，并使用 load_from_cache_file=True
+    with torch_main_process_first(local_rank=int(os.environ.get("LOCAL_RANK", -1)), desc="dataset map"):
+        train_dataset = train_dataset.map(process_func, remove_columns=train_dataset.column_names)
+        eval_dataset = eval_dataset.map(process_func, remove_columns=eval_dataset.column_names)
 
     # 4. LoRA 配置 (替换 AdaLoRA)
     # 计算步数
