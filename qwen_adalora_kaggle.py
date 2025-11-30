@@ -112,8 +112,8 @@ def train_qwen_adalora():
 
     # 计算总训练步数 (用于 AdaLoRA 调度)
     per_device_batch_size = 1
-    gradient_accumulation_steps = 8
-    num_epochs = 3
+    gradient_accumulation_steps = 8 # 等效 batch_size = 8
+    num_epochs = 3  # 数据量增加后，增加轮数以充分训练
     
     # 注意：这里使用 train_dataset 的长度来计算
     num_update_steps_per_epoch = len(train_dataset) // (per_device_batch_size * gradient_accumulation_steps)
@@ -197,7 +197,7 @@ def train_qwen_adalora():
         per_device_train_batch_size=per_device_batch_size,
         per_device_eval_batch_size=1,   # 验证集批次大小
         gradient_accumulation_steps=gradient_accumulation_steps,
-        logging_steps=5,
+        logging_steps=10,               # 每 10 步记录一次日志
         num_train_epochs=num_epochs,
         learning_rate=1e-4,
         fp16=True,
@@ -206,11 +206,11 @@ def train_qwen_adalora():
         
         # 添加验证策略
         eval_strategy="steps",    # 新版 Transformers 使用 eval_strategy
-        eval_steps=10,                  # 每10步验证一次
+        eval_steps=50,                  # 每 50 步验证一次 (约半个 epoch)
         
         # 关键：根据验证集指标保存最佳模型
         save_strategy="steps",          # 必须开启保存，load_best_model_at_end 才能生效
-        save_steps=10,                  # 与 eval_steps 保持一致
+        save_steps=50,                  # 与 eval_steps 保持一致
         load_best_model_at_end=True,    # 训练结束后自动加载验证集效果最好的模型
         metric_for_best_model="eval_loss", # 以 loss 为准 (越小越好)
         # 或者使用 metric_for_best_model="accuracy", greater_is_better=True
