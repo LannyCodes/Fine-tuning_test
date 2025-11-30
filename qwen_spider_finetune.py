@@ -171,6 +171,10 @@ def train_spider():
     gradient_accumulation_steps = 8
     
     if ddp:
+        # 必须先初始化进程组，否则后面的 barrier() 会报错
+        if not torch.distributed.is_initialized():
+             torch.distributed.init_process_group(backend="nccl")
+        
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
         gradient_accumulation_steps = gradient_accumulation_steps // world_size
         print(f"检测到 DDP 环境 (World Size: {world_size})，已调整 device_map 和梯度累积步数")
