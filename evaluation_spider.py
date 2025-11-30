@@ -132,6 +132,26 @@ def generate_response(model, tokenizer, prompt):
     # 解码
     generated_ids = outputs[0][inputs.input_ids.shape[1]:]
     response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+    
+    # === 关键修复：后处理 ===
+    # 提取 Markdown 代码块中的 SQL
+    import re
+    # 匹配 ```sql ... ``` 或 ``` ... ```
+    code_block_pattern = r"```(?:sql)?\s*(.*?)```"
+    match = re.search(code_block_pattern, response, re.DOTALL | re.IGNORECASE)
+    if match:
+        response = match.group(1).strip()
+    else:
+        # 如果没有代码块，尝试提取第一行 SQL (有些模型会先解释再写 SQL)
+        # 简单的启发式：如果包含 SELECT，就截取从 SELECT 开始的部分
+        select_idx = response.upper().find("SELECT")
+        if select_idx != -1:
+            response = response[select_idx:]
+            # 截取到分号或行尾
+            end_idx = response.find(";")
+            if end_idx != -1:
+                response = response[:end_idx+1]
+    
     return response
 
 def execute_sql(db_path, sql):
