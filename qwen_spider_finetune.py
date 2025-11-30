@@ -152,6 +152,10 @@ def train_spider():
     device_map = "auto"
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     ddp = world_size != 1
+    
+    # 预先定义 gradient_accumulation_steps 初始值
+    gradient_accumulation_steps = 8
+    
     if ddp:
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
         gradient_accumulation_steps = gradient_accumulation_steps // world_size
@@ -204,8 +208,8 @@ def train_spider():
     # 计算步数
     # DDP 模式下，per_device_batch_size 决定了每张卡的显存占用
     # T4 (16GB) 在 4-bit QLoRA 下，可以尝试 2 或 4
-    per_device_batch_size = 4 
-    # gradient_accumulation_steps 在上面已经根据 DDP 调整过了
+    per_device_batch_size = 2 
+    # gradient_accumulation_steps 在上面已经定义并根据 DDP 调整过了
     
     num_epochs = 2 # Spider 数据集较复杂，2-3 个 epoch
     
