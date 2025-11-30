@@ -47,6 +47,7 @@ def evaluate_spider(tokenizer, model, test_data, limit=None):
     results = []
     exec_correct_count = 0
     str_correct_count = 0
+    valid_sql_count = 0
     
     try:
         from tqdm import tqdm
@@ -76,6 +77,12 @@ def evaluate_spider(tokenizer, model, test_data, limit=None):
         truth_result = execute_sql(db_path, truth_sql)
         pred_result = execute_sql(db_path, pred_sql)
         
+        # 统计语法合法的 SQL (Valid SQL)
+        # 只要不报错（返回的不是 Error 字符串），就认为语法合法（即便结果不对）
+        is_valid_sql = not isinstance(pred_result, str)
+        if is_valid_sql:
+            valid_sql_count += 1
+
         # 判断执行结果是否一致
         # 注意：如果两个都报错且报错信息一样，不算正确；只有成功执行且结果一致才算
         is_exec_match = False
@@ -91,6 +98,7 @@ def evaluate_spider(tokenizer, model, test_data, limit=None):
             "prediction": pred_sql,
             "is_str_match": is_str_match,
             "is_exec_match": is_exec_match,
+            "is_valid_sql": is_valid_sql,
             "exec_error": pred_result if isinstance(pred_result, str) else ""
         })
         
@@ -100,10 +108,13 @@ def evaluate_spider(tokenizer, model, test_data, limit=None):
     total = len(test_data)
     exec_acc = exec_correct_count / total if total > 0 else 0
     str_acc = str_correct_count / total if total > 0 else 0
+    valid_sql_acc = valid_sql_count / total if total > 0 else 0
     
     print(f"\n=== 评估结果 ===")
     print(f"Execution Accuracy: {exec_acc:.4f} ({exec_correct_count}/{total})")
     print(f"String-Match Accuracy: {str_acc:.4f} ({str_correct_count}/{total})")
+    print(f"Valid SQL Accuracy: {valid_sql_acc:.4f} ({valid_sql_count}/{total}) (语法正确且可执行)")
+
     
     output_csv = "spider_evaluation_results.csv"
     pd.DataFrame(results).to_csv(output_csv, index=False)
