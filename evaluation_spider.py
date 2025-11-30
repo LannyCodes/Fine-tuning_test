@@ -20,6 +20,120 @@ ADAPTER_PATH = "/kaggle/working/qwen2_spider_output"
 DATA_DIR = "/kaggle/input/spider-lora/data/spider"
 DB_DIR = os.path.join(DATA_DIR, "database") # 数据库文件所在目录
 
+def load_spider_tables(tables_path):
+    """
+    读取 tables.json 并构建 db_id -> schema_text 的映射
+    """
+    print(f"正在加载 Schema 信息: {tables_path}")
+    with open(tables_path, 'r', encoding='utf-8') as f:
+        tables_data = json.load(f)
+        
+    db_schema_map = {}
+    
+    for db in tables_data:
+        db_id = db['db_id']
+        table_names = db['table_names_original']
+        column_names = db['column_names_original'] # [table_idx, col_name]
+        
+        # 整理每个表的列
+        schema_dict = {t_name: [] for t_name in table_names}
+        
+        for table_idx, col_name in column_names:
+            if table_idx == -1: # 通用列如 *
+                continue
+            if table_idx < len(table_names):
+                table_name = table_names[table_idx]
+                schema_dict[table_name].append(col_name)
+                
+        # 格式化为文本
+        schema_text = ""
+        for t_name, cols in schema_dict.items():
+            schema_text += f"Table: {t_name}\nColumns: {', '.join(cols)}\n\n"
+            
+        db_schema_map[db_id] = schema_text.strip()
+        
+    return db_schema_map
+
+def load_spider_dev_data(data_path, db_schema_map):
+    """
+    加载测试数据 (dev.json) 并结合 Schema
+    """
+    print(f"正在加载测试数据: {data_path}")
+    with open(data_path, 'r', encoding='utf-8') as f:
+        raw_data = json.load(f)
+        
+    processed_data = []
+    for item in raw_data:
+        db_id = item['db_id']
+        question = item['question']
+        query = item['query'] # Ground Truth SQL
+        
+        # 获取对应的 schema
+        schema_context = db_schema_map.get(db_id, "")
+        
+        # 构建与训练时一致的 Prompt
+        instruction = (
+            f"Human: 你是一个专业的数据库工程师。请根据以下的数据库 Schema，编写对应的 SQL 语句来回答用户的问题。\n\n"
+            f"[Schema 信息]\n{schema_context}\n\n"
+            f"用户问题: {question}\n"
+            f"Assistant: "
+        )
+        
+        processed_data.append({
+            "instruction": instruction,
+            "output": query,
+            "question_raw": question,
+            "db_id": db_id
+        })
+        
+    return processed_data
+
+def load_models():
+    """加载基座模型和 LoRA 适配器"""
+    print(f"正在加载基座模型: {MODEL_ID}")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        device_map="auto",
+        torch_dtype=torch.float16,
+        trust_remote_code=True
+    )
+    
+    if os.path.exists(ADAPTER_PATH):
+        print(f"正在加载适配器: {ADAPTER_PATH}")
+        # 自动查找最新的 checkpoint
+        checkpoint_path = ADAPTER_PATH
+        subdirs = [d for d in os.listdir(ADAPTER_PATH) if d.startswith("checkpoint")]
+        if subdirs:
+            latest = sorted(subdirs, key=lambda x: int(x.split("-")[-1]))[-1]
+            checkpoint_path = os.path.join(ADAPTER_PATH, latest)
+            print(f"使用 Checkpoint: {checkpoint_path}")
+            
+        model = PeftModel.from_pretrained(model, checkpoint_path)
+    else:
+        print("警告: 未找到适配器路径，将使用原始基座模型进行推理！")
+        
+    model.eval()
+    return tokenizer, model
+
+def generate_response(model, tokenizer, prompt):
+    """生成 SQL 回答"""
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=128, # SQL 通常不会特别长
+            do_sample=False,    # 确定性生成，适合代码生成
+            pad_token_id=tokenizer.eos_token_id
+        )
+    
+    # 解码
+    generated_ids = outputs[0][inputs.input_ids.shape[1]:]
+    response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+    return response
+
 def execute_sql(db_path, sql):
     """在 SQLite 中执行 SQL 并返回结果"""
     if not os.path.exists(db_path):
