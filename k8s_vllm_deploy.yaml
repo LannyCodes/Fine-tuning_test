@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qwen2-spider-vllm
+  labels:
+    app: qwen2-spider
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qwen2-spider
+  template:
+    metadata:
+      labels:
+        app: qwen2-spider
+    spec:
+      volumes:
+      - name: model-volume
+        hostPath:
+          # 假设你已经把合并后的模型放到了宿主机的这个路径下
+          # 如果是云环境，这里应该使用 PVC (PersistentVolumeClaim)
+          path: /data/models/qwen2_spider_merged
+          type: Directory
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "4Gi"
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest  # 使用官方 vLLM 镜像
+        command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+        args:
+        - "--model"
+        - "/model"
+        - "--served-model-name"
+        - "qwen2-spider"
+        - "--tensor-parallel-size"
+        - "2"              # 重要：这里设置为 2，对应 requests.nvidia.com/gpu: 2
+        - "--trust-remote-code"
+        - "--dtype"
+        - "float16"
+        - "--gpu-memory-utilization"
+        - "0.9"
+        ports:
+        - containerPort: 8000
+        volumeMounts:
+        - name: model-volume
+          mountPath: /model
+        - name: shm
+          mountPath: /dev/shm
+        resources:
+          limits:
+            nvidia.com/gpu: 2  # 申请 2 张 GPU
+            memory: "32Gi"
+          requests:
+            nvidia.com/gpu: 2
+            memory: "16Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen2-spider-service
+spec:
+  type: NodePort  # 或者 LoadBalancer，取决于你的 K8s 环境
+  selector:
+    app: qwen2-spider
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+      nodePort: 30000  # 如果是 NodePort 类型，固定外部访问端口
